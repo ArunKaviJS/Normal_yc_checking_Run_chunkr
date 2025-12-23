@@ -25,6 +25,7 @@ def get_original_filename_from_mongo(file_id: str) -> str:
     return doc.get("originalS3File")  # or doc["originalS3File"]
 
 
+
 def lambda_handler(event, context):
     """
     Run Chunkr text extraction (Mongo-safe orchestration).
