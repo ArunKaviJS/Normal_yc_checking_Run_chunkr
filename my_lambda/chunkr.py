@@ -13,6 +13,7 @@ CHUNKR_API_KEY = os.getenv("CHUNKR_API_KEY")
 # -------------------------
 # Helper functions
 # -------------------------
+
 def extract_text_from_chunk(chunk_obj):
     """
     Extract clean text from a Chunkr chunk, avoiding duplicate text from segments and content.
