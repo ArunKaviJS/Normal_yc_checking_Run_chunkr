@@ -17,6 +17,9 @@ from dotenv import load_dotenv
 load_dotenv()
 CHUNKR_API_KEY = os.getenv("CHUNKR_API_KEY")
 
+if not CHUNKR_API_KEY:
+    raise ValueError("❌ CHUNKR_API_KEY not found in environment variables")
+
 # -------------------------
 # Helper: Extract clean text
 # -------------------------
@@ -26,23 +29,24 @@ def extract_text_from_chunk(chunk_obj):
     """
     chunk_text = ""
 
-    if hasattr(chunk_obj, "llm") and chunk_obj.llm:
+    # Priority order
+    if getattr(chunk_obj, "llm", None):
         chunk_text = chunk_obj.llm
 
-    elif hasattr(chunk_obj, "content") and chunk_obj.content:
+    elif getattr(chunk_obj, "content", None):
         chunk_text = chunk_obj.content
 
-    elif hasattr(chunk_obj, "segments") and chunk_obj.segments:
+    elif getattr(chunk_obj, "segments", None):
         texts = []
         for seg in chunk_obj.segments:
-            if hasattr(seg, "content") and seg.content:
+            if getattr(seg, "content", None):
                 texts.append(seg.content)
         chunk_text = "\n".join(texts)
 
-    elif hasattr(chunk_obj, "html") and chunk_obj.html:
+    elif getattr(chunk_obj, "html", None):
         chunk_text = chunk_obj.html
 
-    # Remove HTML tags if present
+    # Strip HTML if present
     if "<" in chunk_text and ">" in chunk_text:
         soup = BeautifulSoup(chunk_text, "html.parser")
         chunk_text = soup.get_text(separator="\n")
@@ -51,22 +55,26 @@ def extract_text_from_chunk(chunk_obj):
 
 
 # -------------------------
-# Helper: Get real page number
+# Helper: Correct page number extraction
 # -------------------------
 def get_page_number(chunk_obj, default_page=1):
     """
-    Safely extract page number from chunk or its segments.
+    Extract real page number from Chunkr metadata.
     """
 
-    # 1️⃣ Direct chunk page number
-    if hasattr(chunk_obj, "page_number") and chunk_obj.page_number is not None:
-        return int(chunk_obj.page_number)
+    # 1️⃣ Chunk-level metadata
+    if hasattr(chunk_obj, "metadata") and chunk_obj.metadata:
+        page = chunk_obj.metadata.get("page_number")
+        if page is not None:
+            return int(page)
 
-    # 2️⃣ Segment-level page number
+    # 2️⃣ Segment-level metadata
     if hasattr(chunk_obj, "segments"):
         for seg in chunk_obj.segments:
-            if hasattr(seg, "page_number") and seg.page_number is not None:
-                return int(seg.page_number)
+            if hasattr(seg, "metadata") and seg.metadata:
+                page = seg.metadata.get("page_number")
+                if page is not None:
+                    return int(page)
 
     return default_page
 
@@ -77,6 +85,7 @@ def get_page_number(chunk_obj, default_page=1):
 async def process_file_async(filepath):
     client = Chunkr(api_key=CHUNKR_API_KEY)
 
+    # 🔥 Page-accurate configuration
     config = Configuration(
         segmentation_strategy=SegmentationStrategy.PAGE,
         error_handling=ErrorHandlingStrategy.CONTINUE,
@@ -88,11 +97,11 @@ async def process_file_async(filepath):
         expires_in=3600,
         segment_processing={
             "page": {
-                "crop_image": "All",
+                "strategy": "AUTO",        # ✅ preserves physical pages
                 "format": "Markdown",
-                "strategy": "LLM",
-                "extended_context": True,
-                "description": True,
+                "crop_image": "All",
+                "extended_context": False,
+                "description": False,
             }
         },
     )
@@ -103,10 +112,14 @@ async def process_file_async(filepath):
     print("🔹 Processing document...")
     task = await task.poll()
 
-    chunks = task.output.chunks if hasattr(task.output, "chunks") else []
+    chunks = getattr(task.output, "chunks", [])
+
+    if not chunks:
+        print("⚠️ No chunks returned from Chunkr")
+        return "", 0
 
     # -------------------------
-    # Group content by page
+    # Group text by page
     # -------------------------
     pages = {}
 
@@ -125,8 +138,14 @@ async def process_file_async(filepath):
     final_pages = []
 
     for page_no in sorted(pages.keys()):
-        page_text = "\n\n".join(dict.fromkeys(pages[page_no])).strip()
-        labeled_page = f"===== CHUNKR PAGE NUMBER {page_no} =====\n{page_text}"
+        # remove duplicates while preserving order
+        unique_text = list(dict.fromkeys(pages[page_no]))
+        page_text = "\n\n".join(unique_text).strip()
+
+        labeled_page = (
+            f"===== CHUNKR PAGE NUMBER {page_no} =====\n"
+            f"{page_text}"
+        )
         final_pages.append(labeled_page)
 
     await client.close()
@@ -135,6 +154,3 @@ async def process_file_async(filepath):
     page_count = len(final_pages)
 
     return all_text, page_count
-
-
-# -------------------------
