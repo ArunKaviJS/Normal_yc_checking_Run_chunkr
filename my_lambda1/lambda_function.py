@@ -4,41 +4,33 @@ import traceback
 from dotenv import load_dotenv
 from bson import ObjectId
 
-from textract_service import run_chunkr, get_random_textract_client
-from mongo import mark_file_as_failed, update_job_status,get_mongo_collection,update_debit_credit,delete_credit_record
+from textract_service import run_chunkr
+from mongo import (
+    mark_file_as_failed,
+    update_job_status,
+    get_mongo_collection,
+    delete_credit_record
+)
 
 load_dotenv()
-S3_BUCKET_NAME='yellow-checks-test'
-
+S3_BUCKET_NAME = "yellow-checks-test"
 
 
 def get_original_filename_from_mongo(file_id: str) -> str:
-    """
-    Fetch original filename from MongoDB using file_id.
-    """
     collection = get_mongo_collection("tb_file_details")
     doc = collection.find_one({"_id": ObjectId(file_id)})
 
     if not doc:
-        raise ValueError(f"No file found in MongoDB for file_id: {file_id}")
+        raise ValueError(f"No file found for file_id: {file_id}")
 
-    return doc.get("originalS3File")  # or doc["originalS3File"]
-
+    return doc["originalS3File"]
 
 
 def lambda_handler(event, context):
-    """
-    Run Chunkr text extraction (Mongo-safe orchestration).
-    Expected Input:
-        {
-            "userId": "...",
-            "clusterId": "...",
-            "fileId": "...",
-            "creditId": "...",
-            "fileName": "document.pdf",
-            "jobId": "optional"
-        }
-    """
+    page_count = 0
+    pages = None
+    credit_deleted = False
+
     try:
         print("📥 Incoming event:", json.dumps(event, indent=2))
 
@@ -48,94 +40,67 @@ def lambda_handler(event, context):
         file_id = event["fileId"]
         credit_id = event.get("creditId")
         job_id = event.get("jobId")
-        filename = get_original_filename_from_mongo(file_id)
-        region="ap-south-1"
-        bucket = event.get("bucket", S3_BUCKET_NAME)
-        print(bucket)
-        file_oid = ObjectId(file_id)
-        user_oid = ObjectId(user_id)
-        cluster_oid = ObjectId(cluster_id)
-        credit_oid = ObjectId(credit_id)
 
-        # --- Build S3 key ---
+        filename = get_original_filename_from_mongo(file_id)
+
+        bucket = event.get("bucket", S3_BUCKET_NAME)
+        region = "ap-south-1"
+
+        file_oid = ObjectId(file_id)
+        credit_oid = ObjectId(credit_id) if credit_id else None
+
         s3_key = f"{user_id}/{cluster_id}/raw/{filename}"
         print(f"🔹 S3 Key: {s3_key}")
 
-        textract, textract_region, temp_bucket = get_random_textract_client()
-
-        print(temp_bucket)
-
-        # --- Get random region + temp bucket ---
-        
-
-        # --- Run Chunkr (instead of Textract) ---
+        # --- Run Chunkr (STRICT PAGE MODE) ---
         try:
-            print("⚙️ Running Chunkr extraction...")
-            extraction_result = run_chunkr(bucket, s3_key,file_id, region)
+            print("⚙️ Running Chunkr (strict page mode)...")
+            extraction_result = run_chunkr(bucket, s3_key, file_id, region)
         except Exception as e:
-            if credit_id:
-                print(f"💳 Deleting credit record {credit_id} due to MongoDB update failure")
-                delete_credit_record(credit_oid,file_oid)
-            print("❌ Exception in RunChunkr:", str(e))
+            print("❌ Chunkr execution failed:", str(e))
+            raise
 
-            
         # --- Validate output ---
         if not extraction_result or not isinstance(extraction_result, dict):
-            print("❌ run_chunkr returned unexpected result; aborting.")
-            # if credit_id:
-            #     print(f"💳 Deleting credit record {credit_id} due to MongoDB update failure")
-            #     delete_credit_record(credit_oid,file_oid)
-                
-            mark_file_as_failed(file_id)
-            update_job_status(job_id, status="error", message="Chunkr extraction failed")
-            return {
-                **event,
-                "status": "Failed",
-                "creditId": credit_id,
-                "clusterId": cluster_id,
-                "userId": user_id,
-                "fileId": file_id,
-                "filename": filename,
-                "page_count": page_count,
-                "normalized_data": None,
-            }
+            raise ValueError("Invalid Chunkr output")
 
-        # --- Extract details ---
         page_count = extraction_result.get("page_count", 0)
-        normalized_data = extraction_result.get("normalized_data", {})
+        pages = extraction_result.get("pages", {})
 
-        print(f"✅ Chunkr completed successfully — {page_count} pages processed.")
+        if page_count == 0 or not pages:
+            raise ValueError("Chunkr returned zero pages")
 
-        # --- Return consistent payload ---
+        print(f"✅ Chunkr success — {page_count} pages extracted")
+
         return {
             **event,
             "status": "success",
-            "creditId": credit_id,
-            "clusterId": cluster_id,
-            "userId": user_id,
-            "fileId": file_id,
-            "filename": filename,
             "page_count": page_count,
-            "normalized_data": extraction_result,
+            "pages": pages,   # ✅ page-wise chunks
+            "filename": filename,
         }
 
     except Exception as e:
-        print("❌ Exception in RunChunkr:", str(e))
+        print("❌ Lambda failure:", str(e))
         traceback.print_exc()
+
         mark_file_as_failed(event.get("fileId"))
-        if credit_id:
-                print(f"💳 Deleting credit record {credit_id} due to MongoDB update failure")
-                delete_credit_record(credit_oid,file_oid)
-                
-        update_job_status(event.get("jobId"), status="error", message=str(e))
+
+        if credit_id and not credit_deleted:
+            print(f"💳 Deleting credit {credit_id}")
+            delete_credit_record(ObjectId(credit_id), ObjectId(file_id))
+            credit_deleted = True
+
+        update_job_status(
+            event.get("jobId"),
+            status="error",
+            message=str(e)
+        )
+
         return {
-                **event,
-                "status": "Failed",
-                "creditId": credit_id,
-                "clusterId": cluster_id,
-                "userId": user_id,
-                "fileId": file_id,
-                "filename": filename,
-                "page_count": page_count,
-                "normalized_data": None,
-            }
+            **event,
+            "status": "Failed",
+            "page_count": page_count,
+            "pages": None,
+            "filename": event.get("fileName"),
+        }
