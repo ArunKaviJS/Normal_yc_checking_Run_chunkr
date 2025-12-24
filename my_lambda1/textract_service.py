@@ -20,7 +20,7 @@ from mongo import (
 from datetime import datetime, timezone
 import os
 import asyncio
-from chunkr import extract_text_from_chunk, process_file_async
+from chunkr import  process_file_async
 from uuid import uuid4
 import time
 import traceback
