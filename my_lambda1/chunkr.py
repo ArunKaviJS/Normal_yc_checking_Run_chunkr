@@ -97,7 +97,7 @@ async def process_file_async(filepath):
         expires_in=3600,
         segment_processing={
             "page": {
-                "strategy": "AUTO",        # ✅ preserves physical pages
+                "strategy": "Auto",        # ✅ preserves physical pages
                 "format": "Markdown",
                 "crop_image": "All",
                 "extended_context": False,

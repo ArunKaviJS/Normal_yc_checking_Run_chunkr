@@ -82,9 +82,9 @@ def lambda_handler(event, context):
         # --- Validate output ---
         if not extraction_result or not isinstance(extraction_result, dict):
             print("❌ run_chunkr returned unexpected result; aborting.")
-            if credit_id:
-                print(f"💳 Deleting credit record {credit_id} due to MongoDB update failure")
-                delete_credit_record(credit_oid,file_oid)
+            # if credit_id:
+            #     print(f"💳 Deleting credit record {credit_id} due to MongoDB update failure")
+            #     delete_credit_record(credit_oid,file_oid)
                 
             mark_file_as_failed(file_id)
             update_job_status(job_id, status="error", message="Chunkr extraction failed")
