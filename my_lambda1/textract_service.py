@@ -20,7 +20,7 @@ from mongo import (
 from datetime import datetime, timezone
 import os
 import asyncio
-from chunkr import  extract_pages_strict
+from chunkr import extract_text_from_chunk, process_file_async
 from uuid import uuid4
 import time
 import traceback
@@ -236,7 +236,7 @@ def run_chunkr(bucket: str, key: str, file_id: str,region: str = "ap-south-1") -
 
         # --- Process via Chunkr ---
         print("🧠 Starting Chunkr text extraction...")
-        extracted_text, page_count = asyncio.run(extract_pages_strict(local_filepath))
+        extracted_text, page_count = asyncio.run(process_file_async(local_filepath))
         print('****chunkr raw text********')
         print(extracted_text)
         print('*********')
