@@ -5,8 +5,8 @@ from chunkr_ai.models import Configuration, LlmProcessing, FallbackStrategy, Seg
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import boto3
+import fitz
 from botocore.exceptions import ClientError
-
 load_dotenv()
 CHUNKR_API_KEY = os.getenv("CHUNKR_API_KEY")
 

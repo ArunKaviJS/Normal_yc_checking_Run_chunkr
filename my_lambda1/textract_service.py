@@ -24,6 +24,7 @@ from chunkr import extract_text_from_chunk, process_single_page
 from uuid import uuid4
 import time
 import traceback
+import fitz
 
 # -----------------------------
 # Configuration
