@@ -38,9 +38,12 @@ def extract_text_from_chunk(chunk_obj):
     return chunk_text.strip()
 
 
-
-async def process_file_async(filepath):
+async def process_single_page(filepath: str) -> str:
+    """
+    Process ONE page file via Chunkr and return extracted text.
+    """
     client = Chunkr(api_key=CHUNKR_API_KEY)
+
     config = Configuration(
         segmentation_strategy=SegmentationStrategy.PAGE,
         error_handling=ErrorHandlingStrategy.CONTINUE,
@@ -60,26 +63,17 @@ async def process_file_async(filepath):
             },
         }
     )
-    print(f"🔹 Uploading file to Chunkr: {filepath}")
+
     task = await client.upload(filepath, config)
-    print("🔹 File uploaded, polling for result...")
     task = await task.poll()
-    
+
     chunks = task.output.chunks if hasattr(task.output, "chunks") else []
-    print(f"🔹 Total chunks found: {len(chunks)}")
 
     page_texts = []
+    for c in chunks:
+        text = extract_text_from_chunk(c)
+        if text:
+            page_texts.append(text)
 
-    for i, c in enumerate(chunks, start=1):
-        page_text = extract_text_from_chunk(c)
-        if page_text.strip():
-            labeled_page = f"=====  CHUNKR PAGE NUMBER {i} =====\n{page_text.strip()}"
-            page_texts.append(labeled_page)
-
-    # remove exact duplicates while preserving order
-    page_texts = list(dict.fromkeys(page_texts))
-    all_text = "\n\n".join(page_texts)
-    page_count = len(page_texts)
-    
     await client.close()
-    return all_text, page_count
+    return "\n\n".join(page_texts).strip()

@@ -20,7 +20,7 @@ from mongo import (
 from datetime import datetime, timezone
 import os
 import asyncio
-from chunkr import extract_text_from_chunk, process_file_async
+from chunkr import extract_text_from_chunk, process_single_page
 from uuid import uuid4
 import time
 import traceback
@@ -42,6 +42,31 @@ def get_random_textract_client():
     textract = boto3.client("textract", region_name=region)
     temp_bucket = f"{TEMP_BUCKET_PREFIX}{region}"
     return textract, region, temp_bucket
+
+
+
+def split_pdf_into_pages(input_pdf_path: str, output_dir: str) -> list[str]:
+    """
+    Splits a PDF into single-page PDFs.
+    Returns list of page file paths in correct order.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    doc = fitz.open(input_pdf_path)
+    page_files = []
+
+    for page_index in range(len(doc)):
+        new_doc = fitz.open()
+        new_doc.insert_pdf(doc, from_page=page_index, to_page=page_index)
+
+        page_path = os.path.join(output_dir, f"page_{page_index + 1}.pdf")
+        new_doc.save(page_path)
+        new_doc.close()
+
+        page_files.append(page_path)
+
+    doc.close()
+    return page_files
 
 
 def copy_to_temp_bucket(source_bucket: str, source_key: str, temp_bucket: str, region: str) -> Optional[str]:
@@ -236,21 +261,34 @@ def run_chunkr(bucket: str, key: str, file_id: str,region: str = "ap-south-1") -
 
         # --- Process via Chunkr ---
         print("🧠 Starting Chunkr text extraction...")
-        extracted_text, page_count = asyncio.run(process_file_async(local_filepath))
-        print('****chunkr raw text********')
-        print(extracted_text)
-        print('*********')
-        print(page_count)
+        
+        print("📄 Splitting PDF into pages...")
+        pages_dir = "/tmp/pages"
+        page_files = split_pdf_into_pages(local_filepath, pages_dir)
 
-        if not extracted_text:
-            raise Exception("Chunkr returned no text output")
+        print(f"📄 Total pages detected: {len(page_files)}")
+
+        page_outputs = []
+
+        for idx, page_file in enumerate(page_files, start=1):
+            print(f"🧠 Processing page {idx} via Chunkr...")
+            page_text = asyncio.run(process_single_page(page_file))
+            print(f'****{page_text}****')
+
+            page_outputs.append({
+                "page_number": idx,
+                "content": page_text
+            })
+
+        if not any(p["content"] for p in page_outputs):
+            raise Exception("Chunkr returned no text for all pages")
 
         
-        print(f"🔹 Extracted text length: {len(extracted_text)} (pages: {page_count})")
+       
 
         final_output = {
-            "page_count": page_count,
-            "normalized_data": extracted_text
+            "page_count": len(page_outputs),
+            "normalized_data": page_outputs
         }
 
         set_job_succeeded(file_id, final_output, page_count=None)
